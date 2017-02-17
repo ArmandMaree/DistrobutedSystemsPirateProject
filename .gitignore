@@ -4,6 +4,7 @@ given/COS786_Project_Data.zip
 
 # Program Specific Files
 *.chat
+*.dat
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
