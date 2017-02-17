@@ -1,16 +1,21 @@
 #!/usr/bin/python
+
 import os
 import time
 import json
-
-from pirate import Pirate
+import multiprocessing # for getting number of cores
 
 class QuarterMaster:
-	"""docstring for QuarterMaster"""
-
 	def __init__(self):
 		print("Quarter Master created!")
 		self.tellRummy("-wake")
+
+	def createPirates(self):
+		numCpus = multiprocessing.cpu_count()
+
+		for x in xrange(0, numCpus):
+			os.system("./pirate.py --id " + str(x))
+			self.tellRummy("-a 1")
 
 	def tellPirate(self, pirateId, message):
 		sentmessage = False
@@ -36,9 +41,10 @@ class QuarterMaster:
 
 	def tellRummy(self, message):
 		rummyResponse = json.loads(os.popen("./rummy.pyc " + message).read())
-		print "Rummy (" + rummyResponse["status"] + "): ", rummyResponse["message"]
+		print "R (" + rummyResponse["status"] + "): ", rummyResponse["message"]
 		return json.dumps(rummyResponse)
 
 print("Let's find that treasure!\n")
 qm = QuarterMaster()
+qm.createPirates()
 qm.tellPirate(1, "hello")
