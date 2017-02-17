@@ -1,47 +1,44 @@
+#!/usr/bin/python
 import os
 import time
+import json
 
 from pirate import Pirate
 
-class QuarterMaster(Pirate):
+class QuarterMaster:
 	"""docstring for QuarterMaster"""
 
 	def __init__(self):
-		super(QuarterMaster, self).__init__()
 		print("Quarter Master created!")
-
-	def tellRummy(self, message):
-		readmessage = False
-		filename = "./rummy.chat"
-		filenameLock = filename + ".lock"
-
-		while not readmessage:
-			try:
-				os.rename(filename, filenameLock)
-				rummychat = open("rummy.chat.lock", "a+")
-				rummychat.write("Q" + message)
-			except OSError as e:
-				print("QM: rummy.chat is locked.")
-				time.sleep(1)
-			finally:
-				rummychat.close()
-				os.rename(filenameLock, filename)
-				readmessage = True
+		self.tellRummy("-wake")
 
 	def tellPirate(self, pirateId, message):
-		readmessage = False
-		filename = "./pirate" + pirateId + ".chat"
+		sentmessage = False
+		filename = "pirate_" + str(pirateId) + ".chat"
 		filenameLock = filename + ".lock"
 
-		while not readmessage:
+		if not os.path.exists(filenameLock):
+			piratechat = open(filename, "w+")
+			piratechat.close()
+
+		while not sentmessage:
 			try:
 				os.rename(filename, filenameLock)
-				rummychat = open(filenameLock, "a+")
-				rummychat.write(message)
+				piratechat = open(filenameLock, "a+")
+				piratechat.write(message)
 			except OSError as e:
-				print("QM: Pirate " + pirateId + " is locked.")
-				time.sleep(1)
+				print("QM: '" + filename + "' is locked.")
 			finally:
-				rummychat.close()
+				piratechat.close()
 				os.rename(filenameLock, filename)
-				readmessage = True
+				sentmessage = True
+				print("QM: Message sent to pirate " + str(pirateId) + ": " + message)
+
+	def tellRummy(self, message):
+		rummyResponse = json.loads(os.popen("./rummy.pyc " + message).read())
+		print "Rummy (" + rummyResponse["status"] + "): ", rummyResponse["message"]
+		return json.dumps(rummyResponse)
+
+print("Let's find that treasure!\n")
+qm = QuarterMaster()
+qm.tellPirate(1, "hello")

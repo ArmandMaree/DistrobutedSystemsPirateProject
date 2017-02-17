@@ -1,49 +1,34 @@
 import os
 import time
 
-class Pirate(object):
+class Pirate:
 	"""docstring for Pirate"""
 	numPirates = 0
 	myId = 0
-	quartermaster = None
 
-	def __init__(self, quartermaster = None):
+	def __init__(self):
 		print("Pirate created!")
 		myId = Pirate
-		self.quartermaster = quartermaster
+		Pirate.numPirates = Pirate.numPirates + 1
 
 	def tellQuarterMaster(self, message):
-		readmessage = False
-		filename = "./quartermaster.chat"
+		sentmessage = False
+		filename = "quartermaster.chat"
 		filenameLock = filename + ".lock"
 
-		while not readmessage:
+		if not os.path.exists(filenameLock):
+			qmchat = open(filename, "w+")
+			qmchat.close()
+
+		while not sentmessage:
 			try:
 				os.rename(filename, filenameLock)
-				rummychat = open("rummy.chat.lock", "a+")
-				rummychat.write(message)
+				qmchat = open(filenameLock, "a+")
+				qmchat.write(message)
 			except OSError as e:
-				print("QM: rummy.chat is locked.")
+				print("P(" + str(myId) + ": " + filename + " is locked.")
 				time.sleep(1)
 			finally:
-				rummychat.close()
+				qmchat.close()
 				os.rename(filenameLock, filename)
-				readmessage = True
-
-	def tellPirate(self, pirateId, message):
-		readmessage = False
-		filename = "./pirate" + pirateId + ".chat"
-		filenameLock = filename + ".lock"
-
-		while not readmessage:
-			try:
-				os.rename(filename, filenameLock)
-				rummychat = open(filenameLock, "a+")
-				rummychat.write(message)
-			except OSError as e:
-				print("QM: Pirate " + pirateId + " is locked.")
-				time.sleep(1)
-			finally:
-				rummychat.close()
-				os.rename(filenameLock, filename)
-				readmessage = True
+				sentmessage = True
