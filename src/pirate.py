@@ -4,127 +4,175 @@ import os
 import time
 import sys
 import json
+import socket
+import threading
 from time import gmtime, strftime
 from datetime import datetime
 import hashlib
 
-def printEnd(text, start="", end="\n"):
-	currTime = strftime("%Y-%m-%d %H:%M:%S.", gmtime()) + str(datetime.now().microsecond)
-	sys.stdout.write(start+ "(" + currTime + ") " + text + end)
-	sys.stdout.flush()
-
 class Pirate:
-	myId = 0
+	myId = None
+	socket = None
+	pirates = []
+	solvedClues = []
+	clues = []
+
+	def printEnd(self, text, start="", end="\n"):
+		currTime = strftime("%Y-%m-%d %H:%M:%S.", gmtime()) + str(datetime.now().microsecond)
+		sys.stdout.write(start+ "(" + currTime + ") P(" + str(self.myId) + "): " + text + end)
+		sys.stdout.flush()
 
 	def __init__(self):
+		qmIP =  "localhost"
+		qmPort = 40000
 		i = 1
 
 		while i < len(sys.argv):
-			if sys.argv[i] == "--id" or sys.argv[i] == "-i":
+			if sys.argv[i] == "--host" or sys.argv[i] == "-h":
 				i = i + 1
-				self.myId = sys.argv[i]
+				qmIP = sys.argv[i]
+			elif sys.argv[i] == "--port" or sys.argv[i] == "-p":
+				i = i + 1
+				qmPort = sys.argv[i]
+			elif sys.argv[i] == "--spawnqm" or sys.argv[i] == "-s":
+				os.system("./quartermaster.py --first &")
 			else:
-				printEnd("P: Argument " + str(i) + "(" + sys.argv[i] + ") is unknown.")
+				self.printEnd("P: Argument " + str(i) + "(" + sys.argv[i] + ") is unknown.")
 
 			i = i + 1
 
-		open("pirate_" + self.myId + ".chat", 'a').close()
+		self.reconnect(qmIP, qmPort, 5)
 
-	def tellQuarterMaster(self, message):
-		sentmessage = False
-		filename = "quartermaster_" + str(self.myId) + ".chat"
-		filenameLock = filename + ".lock"
 
-		while os.path.exists(filenameLock):
+	def reconnect(self, host = None, port = None, delay = 35):
+		if host == None:
+			wait = True
+			minId = self.myId
+			index = -1
+
+			for x in xrange(0,len(self.pirates)):
+				self.printEnd("PIRATE: " + json.dumps(self.pirates))
+				if self.pirates[x]["id"] < minId:
+					minId = self.pirates[x]["id"]
+					index = x
+
+			if index == -1:
+				cluesFile = open("all.clue", "w")
+				cluesFile.write(json.dumps(self.clues))
+				cluesFile.close()
+				cluesFile = open("solved.clue", "w")
+				cluesFile.write(json.dumps(self.solvedClues))
+				cluesFile.close()
+				self.printEnd("Spawning new quartermaster.")
+
+				os.system("./quartermaster.py --clues all.clue --solved-clues solved.clue > qm.log&")
+				host = "localhost"
+			else:
+				host = self.pirates[index]["address"]["host"]
+			
+			port = 40000
+		else:
 			pass
 
-		while not sentmessage:
+		self.printEnd("Quarter master should be located at " + host + ":" + str(port))
+
+		connected = False
+
+		while not connected:
 			try:
-				os.rename(filename, filenameLock)
-				qmchat = open(filenameLock, "a+")
-				qmchat.write(message)
-				sentmessage = True
-				qmchat.close()
-				os.rename(filenameLock, filename)
-				sentmessage = True
-				printEnd("P(" + str(self.myId) + "): Sent message to quarter master.")
-			except OSError as e:
-				if os.path.exists(filenameLock):
-					# printEnd("P(" + str(self.myId) + "): " + filename + "' is locked.")
-					pass
-				else:
-					printEnd("P(" + str(self.myId) + "): '" + filename + "' does not exist.")
-					raise e
-			finally:
-				pass
+				self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+				self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+				self.socket.connect((host, port))
+				self.socket = self.socket.makefile("w")
+				connected = True
+				self.printEnd("Online                   ", "\r", "\n")
+			except:
+				for x in xrange(0, delay):
+					self.printEnd("Attempting to reconnect in " + str(delay - x) + " seconds.          ", "\r", "")
+					time.sleep(1)
+
+	def tellQuarterMaster(self, message):
+		totalsent = 0
+		sent = self.socket.send(str(len(message)) + "\n")
+		while totalsent < len(message):
+			sent = self.socket.send(message[totalsent:])
+			if sent == 0:
+				raise RuntimeError("socket connection broken")
+			totalsent = totalsent + sent
 
 	def listen(self):
-		filename = "pirate_" + str(self.myId) + ".chat"
-		filenameLock = filename + ".lock"
-		readmessage = False
+		chunks = []
+		bytes_recd = 0
+		msgLength = 0
+		strLength = ""
+		stop = False
 
-		while not readmessage:
-			try:
-				os.rename(filename, filenameLock)
-				qmchat = open(filenameLock, "a+")
-				message = qmchat.read()
-				readmessage = True
+		while not stop:
+			charRead = ''.join(self.socket.recv(1))
+			if charRead == "\n":
+				stop = True
+			else:
+				strLength += charRead
 
-				if message != "":
-					message = json.loads(message)
-					qmchat.close()
-					open(filename, 'w').close()
+		msgLength = int(strLength)
 
-					while not os.path.exists(filename):
-						pass
-						
-					os.remove(filenameLock)
-				else:
-					message = {}
-					qmchat.close()
-					os.rename(filenameLock, filename)
-			except OSError as e:
-				if os.path.exists(filenameLock):
-					# printEnd("P(" + str(self.myId) + "): '" + filename + "' is locked.")
-					pass
-				else:
-					printEnd("P(" + str(self.myId) + "): '" + filename + "' does not exist.")
-					raise e
-			finally:
-				pass
+		while bytes_recd < msgLength:
+			chunk = self.socket.recv(min(msgLength - bytes_recd, 2048))
+			if chunk == '':
+				raise RuntimeError("socket connection broken")
 
-		return message
+			chunks.append(chunk)
+			bytes_recd = bytes_recd + len(chunk)
+
+		return ''.join(chunks)
 
 	def analyseMessage(self, message):
-		if message["status"] == "success":
-			if message["command"] == "solveclue":
-				result = self.solveClue(message["clue"])
-				result = {
-					"pirateId": p.myId,
-					"status": "success",
-					"request": "validate",
-					"clue": result
-				}
-				self.tellQuarterMaster(json.dumps(result))
-			else:
-				printEnd("P(" + str(self.myId) + ": Unknown command " + message["command"] + " message received form pirate " + message["pirateId"])
-		elif message["status"] == "error":
-			printEnd("P(" + str(self.myId) + "): ERROR " + str(message["code"]) + ": " + message["message"] + ".")
+		try:
+			command = message[:message.index(':')]
+			message = message[message.index(':') + 1:]
+		except: # Exception as e
+			command = message
+			message = ""
+
+		if command == "yourid":
+			self.myId = message
+		elif command == "newpirate":
+			self.pirates.append(json.loads(message))
+		elif command == "remove-pirate":
+			message = int(message)
+
+			for x in xrange(0,len(self.pirates)):
+				if message == self.pirates[x]["id"]:
+					self.pirates.remove(x)
+					break
+		elif command == "clues":
+			self.clues = json.loads(message)
+		elif command == "solved-clue":
+			self.solvedClues.append(json.loads(message))
+		elif command == "solved-clues":
+			self.solvedClues = json.loads(message)
+		elif command == "clear-clues":
+			self.solvedClues = []
+		elif command == "solve-clue":
+			solvedClue = self.solveClue(self.clues[int(message)])
+			self.tellQuarterMaster("validate-clue:" + json.dumps(solvedClue))
+			self.solvedClues.append(solvedClue)
 		else:
-			printEnd("P(" + str(self.myId) + "): Unknown status '" + message["status"] + "' received form quartermaster")
+			raise ValueError("Invalid command: " + command)
 
 	def solveClue(self, clue):
-		printEnd("P(" + str(self.myId) + "): Solving clue. Currently at stage 1.", "", "")
 		clue = self.digInTheSand(clue)
-		printEnd("P(" + str(self.myId) + "): Solving clue. Currently at stage 2.", "\r", "")
 		clue = self.searchTheRiver(clue)
-		printEnd("P(" + str(self.myId) + "): Solving clue. Currently at stage 3.", "\r", "")
 		clue = self.crawlIntoTheCave(clue)
-		printEnd("P(" + str(self.myId) + "): Solved clue.                               ", "\r", "\n")
 		hashedClue = hashlib.md5(clue["data"]).hexdigest()
-		# printEnd("HERE IS THE HASH: " + hashedClue)
-		clue["data"] = hashedClue
-		return clue
+		clue["data"] = hashedClue.upper()
+		return {
+			"id": clue["pirateId"],
+			"data": {
+				"id": clue["id"],
+				"key": clue["data"]
+			}
+		}
 
 	def digInTheSand(self, clue):
 		for x in xrange(0,100):
@@ -158,28 +206,12 @@ class Pirate:
 
 		if clue["data"][0].isdigit():
 			clue["data"] += "0A2B3C"
+		else:
+			clue["data"] += "1B2C3D"
 
-		clue["data"] = clue["data"][1:]
 
-		return clue
+		clue["data"] = clue["data"][1:].upper()
 
-	def useBucket(self, clue):
-		newClue = ""
-
-		for c in clue["data"]:
-			if c.isdigit():
-				c = int(c)
-
-				if c > 5:
-					c = c - 2
-				else:
-					c = c * 2
-
-				c = str(c)
-
-			newClue += c
-
-		clue["data"] = newClue
 		return clue
 
 	def useRope(self, clue):
@@ -195,21 +227,19 @@ class Pirate:
 					c = "A"
 				elif c % 3 == 2:
 					c = "B"
-			elif c.isalpha(): #TODO: can be optimized to just an else
-				c = int(c, 16) - 10 # TODO: Check this, i think it is a mistake in the pdf
+			else:
+				ctmp = int(c, 16) - 10
 
-				if c % 5 == 0:
+				if ctmp % 5 == 0:
 					c = "C"
-				elif c % 1 == 0:
+				elif ctmp % 5 == 1:
 					c = "1"
-				elif c % 2 == 0:
+				elif ctmp % 5 == 2:
 					c = "2"
-				else:
-					c = str(c)
 
 			newClue += c
 
-		clue["data"] = newClue
+		clue["data"] = newClue.upper()
 		return clue
 
 	def useTorch(self, clue):
@@ -230,29 +260,56 @@ class Pirate:
 		else:
 			sum = sum[6:] + "A1B2C3"
 
-		clue["data"] = sum
+		clue["data"] = sum.upper()
+		return clue
+
+	def useBucket(self, clue):
+		newClue = ""
+
+		for c in clue["data"]:
+			if c.isdigit():
+				c = int(c)
+
+				if c > 5:
+					c = c - 2
+				else:
+					c = c * 2
+
+				c = str(c)
+
+			newClue += c
+
+		clue["data"] = newClue.upper()
 		return clue
 
 
 p = Pirate()
-
 done = False
 
 while not done:
-	message = {
-		"pirateId": p.myId,
-		"status": "idle",
-		"request": "clue"
-	}
-	p.tellQuarterMaster(json.dumps(message))
-	message = p.listen()
-
-	while message == {}:
+	try:
 		message = p.listen()
 
-	if message["status"] == "success" and message["command"] == "shutdown":
-		done = True
+		while message != "syncdone":
+			p.analyseMessage(message)
+			message = p.listen()
 
-	p.analyseMessage(message)
-	done = True
+		p.printEnd("Synced all data from quarter master.")
 
+		message = "request-clue"
+		p.tellQuarterMaster(message)
+
+		while not done:
+			message = p.listen()
+
+			if message == "stop":
+				done = True
+				p.printEnd("Shutting down.                               ", "\r", "\n")
+			else:
+				p.analyseMessage(message)
+	finally:
+		p.socket.close()
+
+		if not done:
+			print("")
+			p.reconnect()

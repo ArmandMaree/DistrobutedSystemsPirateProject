@@ -4,58 +4,133 @@ import os
 import sys
 import time
 import json
+import socket
+import threading
+import clientsocket
 import multiprocessing # for getting number of cores
 from time import gmtime, strftime
 from datetime import datetime
 
-def printEnd(text, start="", end="\n"):
-	currTime = strftime("%Y-%m-%d %H:%M:%S.", gmtime()) + str(datetime.now().microsecond)
-	sys.stdout.write(start+ "(" + currTime + ") " + text + end)
-	sys.stdout.flush()
-
-def cleanChats():
-	os.system("rm *.chat *.chat.lock *.log *.err 2> /dev/null")
-	pass
-
 class QuarterMaster:
-	pirateIds = []
+	pirates = []
 	clues = []
+	clientsockets = []
 	currentClueId = 0
+	solvedClues = []
+	mapIndex = 1
+	serversocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+	stop = False
+	missedClues = []
+	pirateIds = []
+
+	def printEnd(self, text, start="", end="\n"):
+		currTime = strftime("%Y-%m-%d %H:%M:%S.", gmtime()) + str(datetime.now().microsecond)
+		sys.stdout.write(start+ "(" + currTime + ") QM: " + text + end)
+		sys.stdout.flush()
 
 	def __init__(self):
-		printEnd("Quarter Master created!")
-		printEnd("Waking Rummy...", "", "")
-		self.tellRummy("-wake")
-		printEnd("Rummy is awake.     ", "\r")
-		printEnd("Rummy is preparing...", "", "")
-		self.tellRummy("-prepare")
-		printEnd("Rummy is prepared.       ", "\r")
+		self.serversocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+		i = 1
 
-	def createPirates(self):
-		printEnd("Getting pirates...", "", "")
-		numCpus = multiprocessing.cpu_count()
-		numCpus = 1
-		pirateData = json.loads(self.tellRummy("-add " + str(numCpus)))
+		while i < len(sys.argv):
+			if sys.argv[i] == "--first" or sys.argv[i] == "-f":
+				self.printEnd("Quarter Master created!")
+				self.printEnd("Waking Rummy...", "", "")
+				self.tellRummy("-wake")
+				self.printEnd("Rummy is awake.     ", "\r")
+				self.printEnd("Rummy is preparing...", "", "")
+				self.tellRummy("-prepare")
+				self.printEnd("Rummy is prepared.       ", "\r")
+				self.getPirates()
+				self.shipout()
+				self.getClues()
+			elif sys.argv[i] == "--clues":
+				i = i + 1
+				cluesFile = open(sys.argv[i])
+				self.clues = json.loads(cluesFile.read())
+				cluesFile.close()
+			elif sys.argv[i] == "--solved-clues":
+				i = i + 1
+				cluesFile = open(sys.argv[i])
+				self.solvedClues = json.loads(cluesFile.read())
+				cluesFile.close()
+			# elif sys.argv[i] == "--nextClueId" or sys.argv[i] == "-i":
+			# 	i = i + 1
+			# 	self.currentClueId = sys.argv[i]
+			else:
+				self.printEnd("Argument " + str(i) + "(" + sys.argv[i] + ") is unknown.")
+
+			i = i + 1
+
+		connected = False
+		while not connected:
+			try:
+				self.serversocket.bind(("localhost", 40000))
+				self.serversocket.listen(5)
+				connected = True
+				self.printEnd("Online.")
+			except:
+				pass
+
+		clientsocket.ClientSocket.qmLock = threading.RLock()
+		clientsocket.ClientSocket.qm = self
+
+	def getPirates(self):
+		self.printEnd("Getting pirates...", "", "")
+		pirateData = json.loads(self.tellRummy("-add 10"))
 		self.pirateIds = pirateData["data"]
+		self.printEnd("Got 10 pirates.            ", "\r")
 
-		for x in xrange(0, numCpus):
-			# os.spawnl(os.P_NOWAIT, "./pirate.py --id " + self.pirateIds[x] + " > " + self.pirateIds[x] + ".log " + " 2> " + self.pirateIds[x] + ".err")
-			# os.system("./pirate.py --id " + self.pirateIds[x] + " > " + self.pirateIds[x] + ".log " + " 2> " + self.pirateIds[x] + ".err")
-			# os.system("./pirate.py --id " + self.pirateIds[x])
-			os.system("./pirate.py --id " + self.pirateIds[x] + " &")
-			open("quartermaster_" + self.pirateIds[x] + ".chat", 'a').close()
 
-		printEnd("Got " + str(numCpus) + " pirates.            ", "\r")
+	def listenForConnections(self):
+		numPirates = len(self.clientsockets)
+
+		while not self.stop:
+			self.printEnd("Waiting for pirate.")
+			(cs, address) = self.serversocket.accept()
+			with clientsocket.ClientSocket.qmLock:
+				ct = clientsocket.ClientSocket(cs)
+				self.printEnd("Pirate connected at ", "\r", "")
+				print(address)
+				ct.send("yourid:" + str(numPirates))
+
+				for x in xrange(0,len(self.clientsockets)):
+					self.clientsockets[x].send("newpirate:{\"id\":" + str(numPirates) + ",\"address\":{\"host\":\"" + address[0] + "\",\"port\":\"" + str(address[1]) + "\" } }")
+					ct.send("newpirate:{\"id\":" + str(self.clientsockets[x].pirateId) + ",\"address\":{\"host\":\"" + self.clientsockets[x].address[0] + "\",\"port\":\"" + str(self.clientsockets[x].address[1]) + "\" } }")
+
+				self.clientsockets.append(ct)
+				ct.pirateId = numPirates
+				ct.send("clues:" + json.dumps(self.clues));
+				ct.send("solved-clues:" + json.dumps(self.solvedClues));
+				ct.send("syncdone");
+				ct.start()
+				ct.address = address
+				numPirates += 1
+
+	def broadcastToPirates(self, message, exceptId = -1):
+		with clientsocket.ClientSocket.qmLock:
+			for x in xrange(0,len(self.clientsockets)):
+				if x != exceptId:
+					try:
+						self.clientsockets[x].send(message)
+					except:
+						self.printEnd("Pirate " + str(self.clientsockets[x].pirateId) + " threw exception when broadcasting.")
 
 	def shipout(self):
-		printEnd("Shipping out...", "", "")
+		self.printEnd("Shipping out...", "", "")
 		self.tellRummy("-shipout")
-		printEnd("Shipped out.       ", "\r")
+		self.printEnd("Shipped out.       ", "\r")
 
 	def getClues(self):
-		printEnd("Getting clues...", "", "")
+		self.printEnd("Getting clues...", "", "")
 		clueData = json.loads(self.tellRummy("-clues"))
-		clueData = clueData["data"]
+		self.addClues(clueData["data"])
+		self.printEnd("Got " + str(len(self.clues)) + " clues.         ", "\r")
+
+	def addClues(self, clueList):
+		clueData = clueList
+		self.clues = []
+		self.currentClueId = 0
 
 		for x in xrange(0,len(clueData)):
 			pirateId = clueData[x]["id"]
@@ -65,141 +140,37 @@ class QuarterMaster:
 			for y in xrange(oldLength,len(self.clues)):
 				self.clues[y]["pirateId"] = pirateId
 
-		printEnd("Got " + str(len(self.clues)) + " clues.         ", "\r")
-
-	def tellPirate(self, pirateId, message):
-		sentmessage = False
-		filename = "pirate_" + str(pirateId) + ".chat"
-		filenameLock = filename + ".lock"
-
-		while os.path.exists(filenameLock):
-			pass
-
-		while not sentmessage:
-			try:
-				os.rename(filename, filenameLock)
-				piratechat = open(filenameLock, "a+")
-				piratechat.write(message)
-				sentmessage = True
-				piratechat.close()
-				os.rename(filenameLock, filename)
-				printEnd("QM: Sent message to pirate " + pirateId + ".")
-			except OSError as e:
-				if os.path.exists(filenameLock):
-					# printEnd("QM: '" + filename + "' is locked.")
-					pass
-				else:
-					printEnd("QM: '" + filename + "' does not exist.")
-					raise e
-			finally:
-				pass
-				#printEnd("QM: Message sent to pirate " + str(pirateId) + ".")
-
 	def tellRummy(self, message):
 		returnMsg = os.popen("./rummy.pyc " + message).read()
-		rummyResponse = json.loads(returnMsg)
-		return json.dumps(rummyResponse)
+		return returnMsg
 
-	def listen(self):
-		done = False
-		response = {
-			"proceed": True
-		}
+	def reworkSolvedClues(self):
+		tmpClues = {}
 
-		while not done:
-			for x in xrange(0,len(self.pirateIds)):
-				filename = "quartermaster_" + str(self.pirateIds[x]) + ".chat"
-				filenameLock = filename + ".lock"
-				readmessage = False
+		for x in xrange(0,len(self.pirateIds)):
+			tmpClues[self.pirateIds[x]] = {"data":[], "id":self.pirateIds[x]}
 
-				if os.path.exists(filename):
-					while not readmessage:
-						try:
-							os.rename(filename, filenameLock)
-							piratechat = open(filenameLock, "a+")
-							message = piratechat.read()
-							readmessage = True
+		for x in xrange(0,len(self.solvedClues)):
+			tmpClues[self.solvedClues[x]["id"]]["data"].append(self.solvedClues[x]["data"])
 
-							if message != "":
-								message = json.loads(message)
-								response = self.respondToPirateRequest(message)
-								piratechat.close()
-								open(filename, 'w').close()
+		self.solvedClues = []
 
-								while not os.path.exists(filename):
-									pass
-									
-								os.remove(filenameLock)
-							else:
-								piratechat.close()
-								os.rename(filenameLock, filename)
-						except OSError as e:
-							if os.path.exists(filenameLock):
-								# printEnd("QM: '" + filename + "' is locked.")
-								pass
-							else:
-								printEnd("QM: '" + filename + "' does not exist.")
-								raise e
-						finally:
-							pass
+		for x in xrange(0,len(self.pirateIds)):
+			self.solvedClues.append(tmpClues[self.pirateIds[x]])
 
-				if response["proceed"] == False:
-					done = True
+	def finish(self):
+		for x in xrange(0,len(self.clientsockets)):
+			self.clientsockets[x].stop = True
 
-	def respondToPirateRequest(self, message):
-		response = {
-			"proceed": True
-		}
+		self.stop = True
 
-		if message["status"] == "idle":
-			if message["request"] == "clue":
-				sendMessage = {
-					"status": "success",
-					"command": "solveclue",
-					"clue": self.clues[self.currentClueId]
-				}
-				self.currentClueId = self.currentClueId + 1
-				self.tellPirate(message["pirateId"], json.dumps(sendMessage))
-				# printEnd("QM: Sent clue[" + str(self.currentClueId - 1) + "] to pirate " + message["pirateId"] + ".")
-			else:
-				sendMessage = {
-					"status": "error",
-					"code": 401,
-					"message": "Unknown idle message."
-				}
-				self.tellPirate(message["pirateId"], json.dumps(sendMessage))
-				printEnd("QM: Unknown idle message '" + message["request"] + "' received form pirate " + message["pirateId"])
-		elif message["status"] == "success":
-			if message["request"] == "validate":
-				response["proceed"] = False # debug
-				printEnd("QM: Received validation code: " + message["clue"]["data"])
-			else:
-				sendMessage = {
-					"status": "error",
-					"code": 402,
-					"message": "Unknown success message."
-				}
-				self.tellPirate(message["pirateId"], json.dumps(sendMessage))
-				printEnd("QM: Unknown idle message '" + message["request"] + "' received form pirate " + message["pirateId"])
-		else:
-			sendMessage = {
-				"status": "error",
-				"code": 410,
-				"message": "Unknown status"
-			}
-			self.tellPirate(message["pirateId"], json.dumps(sendMessage))
-			printEnd("QM: Unknown status '" + message["status"] + "' received form pirate " + message["pirateId"])
-
-		return response
+print("Let's find that treasure!\n")
+qm = QuarterMaster()
+qm.listenForConnections()
 
 try:
-	cleanChats()
-	printEnd("Let's find that treasure!\n")
-	qm = QuarterMaster()
-	qm.createPirates()
-	qm.shipout()
-	qm.getClues()
-	qm.listen()
-finally:
-	# cleanChats() # must always be the last statement
-	pass
+	while not qm.stop:
+		time.sleep(10)
+except:
+	for x in xrange(0, len(qm.clientsockets)):
+		qm.clientsockets[x].stop = True
