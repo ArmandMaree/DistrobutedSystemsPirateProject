@@ -203,7 +203,7 @@ class QuarterMaster:
 ######################################################################################
 
 	def tellRummy(self, message):
-		returnMsg = os.popen("./rummy.pyc " + message).read()
+		returnMsg = os.popen("python rummy.pyc " + message).read()
 		return returnMsg
 
 	def prepare(self):

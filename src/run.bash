@@ -5,7 +5,7 @@ numcores="$(grep -c ^processor /proc/cpuinfo)"
 echo "Spawning $numcores clue solvers."
 
 for (( i = 0; i < $numcores; i++ )); do
-	./cluesolver.py  --host "192.168.8.101" &
+	python cluesolver.py &
 done
 
-./quartermaster.py --first --host "192.168.8.101"
+python quartermaster.py --first

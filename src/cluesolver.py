@@ -40,7 +40,7 @@ class ClueSolver(threading.Thread):
 				i = i + 1
 				self.port = sys.argv[i]
 			elif sys.argv[i] == "--spawnqm" or sys.argv[i] == "-s":
-				os.system("./quartermaster.py --first &")
+				os.system("python quartermaster.py --first &")
 			else:
 				self.printEnd("P: Argument " + str(i - 1) + "(" + sys.argv[i] + ") is unknown.")
 
